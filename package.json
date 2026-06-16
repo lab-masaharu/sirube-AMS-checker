@@ -1,0 +1,14 @@
+{
+  "name": "sirube-ams-checker",
+  "version": "0.1.0",
+  "description": "AMS（agent-master.jp）巡回・媒体仕分け 最小確認スクリプト（差分管理システム Phase 0 第一歩）",
+  "type": "module",
+  "scripts": {
+    "crawl": "node crawl-ams.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pg": "^8.21.0",
+    "playwright": "^1.49.0"
+  }
+}

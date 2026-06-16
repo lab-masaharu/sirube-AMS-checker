@@ -1,0 +1,17 @@
+# シークレット（絶対にコミットしない）
+.env
+
+# 依存
+node_modules/
+
+# 出力物
+results.json
+*.log
+
+# 調査・診断時の一時ダンプ（調査済み・コードに知見を反映済み）
+*.html
+*.png
+listarea-dump.txt
+
+# VSCode履歴
+.history/

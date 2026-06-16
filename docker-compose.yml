@@ -1,0 +1,32 @@
+# ============================================================
+# sirube-ams-checker / Docker構成
+# まずは PostgreSQL のみ。取得(crawl-ams.js)はホストのNodeから
+# localhost:5544 経由でこのDBに接続する。
+# n8n / Playwrightコンテナ は動作確認後に追記する。
+# ============================================================
+services:
+  db:
+    image: postgres:16
+    container_name: sirube_ams_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-sirube}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-sirube_local_pw}
+      POSTGRES_DB: ${DB_NAME:-sirube_ams}
+      TZ: Asia/Tokyo
+    ports:
+      # ホスト側 5544 -> コンテナ 5432。
+      # 5432 が他で使われていても衝突しないよう少しずらしている。
+      - "5544:5432"
+    volumes:
+      - sirube_ams_pgdata:/var/lib/postgresql/data
+      # 初回起動時に *.sql が自動実行される（テーブル作成）
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sirube} -d ${DB_NAME:-sirube_ams}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  sirube_ams_pgdata:
