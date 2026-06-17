@@ -7,6 +7,7 @@
     "crawl": "node crawl-ams.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^16.4.5",
     "pg": "^8.21.0",
     "playwright": "^1.49.0"
