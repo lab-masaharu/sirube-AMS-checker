@@ -2,10 +2,11 @@
 // sirube-ams-checker / 404再確認スクリプト 新版
 // system_code: sys_ops_ams_checker
 //
-// 使用方法: node src/run-recheck.js [間隔秒数]
-// 例:       node src/run-recheck.js 120   （120秒間隔・テスト用）
-//           node src/run-recheck.js 1800  （1800秒=30分間隔・本番用）
-// 引数省略: デフォルト120秒（テスト用）
+// 使用方法: node src/run-recheck.js [間隔秒数] [件数上限]
+// 例:       node src/run-recheck.js 120      （120秒間隔・全件）
+//           node src/run-recheck.js 1800     （1800秒=30分間隔・本番用）
+//           node src/run-recheck.js 30 3     （30秒間隔・3件・動作確認用）
+// 引数省略: デフォルト120秒・件数上限なし
 //
 // recheck-vanished.js を新構造（FreinsAdapter + RecheckEngine）で書き直した版。
 // ロジック・安全策・引数インターフェースは同じ。振る舞いを変えない。
@@ -45,9 +46,15 @@ const adapter = new FreinsAdapter();
 async function main() {
   const intervalSec = parseInt(process.argv[2] || String(DEFAULT_INTERVAL_SEC), 10);
   if (isNaN(intervalSec) || intervalSec <= 0) {
-    console.error("使用方法: node src/run-recheck.js [間隔秒数]");
-    console.error("例:       node src/run-recheck.js 120   (テスト)");
-    console.error("          node src/run-recheck.js 1800  (本番: 30分)");
+    console.error("使用方法: node src/run-recheck.js [間隔秒数] [件数上限]");
+    console.error("例:       node src/run-recheck.js 120        (テスト・全件)");
+    console.error("          node src/run-recheck.js 1800       (本番: 30分)");
+    console.error("          node src/run-recheck.js 30 3       (動作確認: 3件)");
+    process.exit(1);
+  }
+  const queueLimit = process.argv[3] ? parseInt(process.argv[3], 10) : null;
+  if (queueLimit !== null && (isNaN(queueLimit) || queueLimit <= 0)) {
+    console.error("件数上限は正の整数で指定してください。例: node src/run-recheck.js 30 3");
     process.exit(1);
   }
 
@@ -58,7 +65,7 @@ async function main() {
 
   const runId = `recheck_${adapter.mediaName}_${new Date().toISOString().replace(/[:.]/g, "").substring(0, 15)}`;
   const startTime = Date.now();
-  log("INFO", "start", { media: adapter.mediaName, intervalSec, runId, headless: HEADLESS });
+  log("INFO", "start", { media: adapter.mediaName, intervalSec, queueLimit, runId, headless: HEADLESS });
 
   // ===== DB: 再確認キュー取得（各 object_id の最新 judgment が vanished の物件）=====
   const dbClient = await pool.connect();
@@ -81,7 +88,9 @@ async function main() {
     `, [adapter.mediaName]);
 
     // RecheckEngine が求める { objectId, mediaId, amsStatus } 形式に変換
-    queue = rows.map(r => ({
+    // queueLimit が指定された場合はその件数に絞る（動作確認用）
+    const limitedRows = queueLimit ? rows.slice(0, queueLimit) : rows;
+    queue = limitedRows.map(r => ({
       objectId: r.object_id,
       mediaId: r.freins_id,
       amsStatus: r.ams_status,
