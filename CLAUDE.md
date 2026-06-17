@@ -109,7 +109,8 @@ PostgreSQL（Docker、ホスト側ポート **5544**）。sirube標準の共通�
 
 - 詳細ページURL: `https://b2b.f-takken.com/properties/detail?id=<freins_id>`
 - freins_id は12桁（例 000002488843）。AMSリスト行の媒体URLから `[?&]id=(...)` で抽出。
-- ログインはID/PWのみ（2段階認証なし）。※ログイン構造・ステータス表示位置は**未調査**（次タスク）。
+- ログインはSSO（auth.f-takken.com経由）。会員メール・パスワードのみ（2段階認証なし）。実証済み。
+- 取引状況: `.info-label`「取引状況」の直後の `.info-val` テキスト。成約済/取り下げ時はページごと404（実物確認済み）。詳細は §11。
 
 ### 取得実績（2回実行・安定）
 
@@ -157,21 +158,33 @@ PostgreSQL（Docker、ホスト側ポート **5544**）。sirube標準の共通�
 
 ## 8. 現在地と次のタスク
 
-### 完了
+### 完了（2026-06-17 時点）
 
-- AMS巡回スクリプト（crawl-ams.js）で778件取得成功（媒体仕分け・ふれんずID抽出込み）。
+#### Phase 0 実装
+
+- crawl-ams.js: AMS巡回・ステータス別取得（公開/商談中の2パス）・778件・媒体仕分け・ふれんずID抽出。
 - PostgreSQL（Docker, port 5544）構築。properties / status_checks / v_latest_diffs 作成済み。
-- load-to-db.js で778件を properties に投入済み（全 active）。
+- load-to-db.js: 778件を properties に投入（全 active・ams_status 付き）。
+- FreinsAdapter: ふれんず472件（実466件）全件巡回・取引状況取得・標準ステータス翻訳。
+- 突合エンジン（computeJudgment）: ams_status × 媒体標準ステータス → judgment。
+- 404再確認ロジック（RecheckEngine）: 1巡目 vanished_suspected → 3回再確認 → 計4回404で vanished 確定。
+- 検知実績: match 約401 / mismatch 8 / vanished 56前後（要確認物件を約14%に絞り込み）。
+- 本番アクセスの安全策（403/429即停止・連続エラー停止・4〜6秒待機・100件分割）が全件規模で機能することを確認。
 
-### 次のタスク（この順序）
+#### OOP整理（媒体アダプタ方式のコード化）
 
-1. **crawl-ams.js をステータス別巡回に改修**: 「公開のみ」「商談中のみ」の2パスで巡回し、
-   各物件に amsStatus（公開/商談中）を付けて results.json に保存。load-to-db.js で ams_status に反映。
-2. **ふれんずのログイン構造・ステータス表示位置を調査**（診断スクリプト）。
-3. **freinsアダプタを作る**: ふれんず462件の詳細ページから実ステータスを取得し標準語に翻訳。
-4. **突合エンジン**: ams_status と 媒体標準ステータス を比較し judgment を決定、status_checks に記録。
-5. **差分抽出**: v_latest_diffs で mismatch/vanished を一覧化（＝Phase 0目的達成）。
-6. その後: SUUMO等アダプタ追加 → n8n化 → Docker包括 → 判断ファイル基盤。
+- 基底 `MediaAdapter` ＋ `FreinsAdapter` ＋ 媒体非依存の共通部品（突合・記録・再確認）に分離。
+- `src/adapters/` ＋ `src/core/` に整理。旧版スクリプト（fetch-freins.js, run-freins-batch.js, recheck-vanished.js）は新版に一本化。
+- リグレッションテスト（verify-freins-adapter.js）: 4/4 PASS 確認済み。
+- `refactor/media-adapter-oop` ブランチで実施 → main にマージ（--no-ff）・GitHub push 済み。コード構造の詳細は §17。
+
+### 次のタスク
+
+1. **MCP化（ふれんず先行）**: `FreinsAdapter` を薄いMCPサーバー（取得のみ）として公開。突合・記録・再確認はMCPの外に置く。MCP Inspectorで個別管理。
+2. **SUUMO/athome/HOME'S アダプタ追加**: 各媒体アダプタを src/adapters/ に追加。掲載あり=open / 消失=vanished の2値判定。
+3. **n8n化（オーケストレーター）**: 0時起動・朝9時出力・404再確認連結。n8nは指揮のみ。重い実処理はn8n外の部品が担う。
+4. **朝の成果物（Web管理画面）**: Express・ローカルでの管理画面。要確認物件の一覧・差分内容・更新済マーク。
+5. その後: 判断ファイル基盤 → Hermes接続 → VPS移行 → 4店舗対応。
 
 ---
 
@@ -383,7 +396,7 @@ ams-checker のデータは、寿命（保持期間）の違いで3種類に分�
 - このAMSはいずれ使わない。最終的には複製し、バックエンドをAPI/AIを組み込んだ形で再構築する。
 - 現在RPA（ブラウザ操作の自動化）で人手の確認作業を機械に置き換えているのは、その再構築への足掛かりである。
 
-### 短期ゴール（Phase 0・現在実装中）
+### 短期ゴール（Phase 0・完了 2026-06-17）
 
 - AMSと媒体（ふれんず先行）のステータス突合を機械化し、人間が確認すべき箇所だけを残して朝9時に届ける。
 - 当面の朝の成果物は「差分リスト（消失・要確認の一覧）」で十分とする。物確資料の形は中期で目指す。
@@ -422,14 +435,13 @@ ams-checker のデータは、寿命（保持期間）の違いで3種類に分�
 
 ### 今後のロードマップ
 
-**1. Git運用**
-- 動作中の版は main に残し業務継続利用。
-- リファクタリングは `refactor/media-adapter-oop` ブランチで進める。
-- 振る舞い（同じ物件→同じjudgment）は変えない。検証完了後にマージ。
+**1. Git運用（完了）**
+- `refactor/media-adapter-oop` ブランチで OOP整理を実施。
+- 振る舞い変わらず（リグレッションテスト 4/4 PASS）を確認して main にマージ（--no-ff）・GitHub push 済み。
 
-**2. OOP整理（媒体アダプタ方式のコード化）**
-- 基底 `MediaAdapter` ＋ `FreinsAdapter` ＋ 媒体非依存の共通部品（突合・記録・再確認）に分離。
-- 媒体追加はアダプタ追加だけで済む構造にする。
+**2. OOP整理（完了）**
+- 基底 `MediaAdapter` ＋ `FreinsAdapter` ＋ 媒体非依存の共通部品（突合・記録・再確認）に分離済み。
+- 媒体追加はアダプタ追加だけで済む構造を実現。コード構造の詳細は §17。
 
 **3. MCP化（ふれんず先行）**
 - `FreinsAdapter` を「薄いMCPサーバー」（取得のみ・案A）として公開。
@@ -452,3 +464,51 @@ ams-checker のデータは、寿命（保持期間）の違いで3種類に分�
 - **透明性の規律**: Hermesに保存する重要事項は森さんが確認できる形を保つ（透明性はCLAUDE.md水準を維持）。Claudeの外部記憶を森さんのブラックボックスにしない。
 - **段取り**: ams-checkerのMCP化（ふれんず）を先に一周し、MCPサーバー構築とInspector管理を経験してから、その型でHermes接続に進む。
 - **CLAUDE.mdの位置づけは不変**: CLAUDE.mdは本システムの「憲法・法律」であり、Hermesの内部記憶より上位。設計判断・禁止事項・ポリシーはCLAUDE.mdに明文化され、誰でも読め、Gitで履歴が残る。
+
+---
+
+## 17. コード構造（OOP整理後・2026-06-17 時点）
+
+### ディレクトリ構成
+
+```text
+sirube-ams-checker/
+├── src/
+│   ├── adapters/
+│   │   ├── MediaAdapter.js       # 基底クラス（インターフェース定義）
+│   │   └── FreinsAdapter.js      # ふれんず専用アダプタ（全ふれんず固有ロジックを閉じ込める）
+│   ├── core/
+│   │   ├── computeJudgment.js    # 突合エンジン（媒体非依存）
+│   │   ├── StatusCheckStore.js   # status_checks への記録（媒体非依存）
+│   │   └── RecheckEngine.js      # 404再確認ループ（任意アダプタを受け取る）
+│   ├── run-batch.js              # バッチ実行エントリ: node src/run-batch.js [limit] [offset]
+│   ├── run-recheck.js            # 再確認実行エントリ: node src/run-recheck.js [intervalSec] [queueLimit]
+│   └── verify-freins-adapter.js  # リグレッションテスト（4物件・既知状態）
+├── crawl-ams.js                  # AMS巡回スクリプト
+├── load-to-db.js                 # properties テーブルへの投入スクリプト
+├── db/init/01_schema.sql         # PostgreSQL スキーマ定義
+└── docker-compose.yml            # PostgreSQL コンテナ（port 5544）
+```
+
+### 設計原則（OOP整理で確立）
+
+- **媒体追加はアダプタ1個追加だけ**: `src/adapters/` に新クラスを追加し、`run-batch.js` の `new FreinsAdapter()` を差し替えるだけ。突合・記録・再確認の共通部品は一切触らない。
+- **MediaAdapter が次の MCP化の単位**: 「1媒体 = 1アダプタ = 1 MCPサーバー」になる。アダプタの境界がそのままMCPサービスの境界になる設計。
+- **振る舞い不変テスト**: `verify-freins-adapter.js` を変更後に必ず実行し、4/4 PASS を確認してからマージする。4物件の既知状態（open/negotiating/vanished_suspected）が変わらないことを担保する。
+
+### MediaAdapter インターフェース
+
+```js
+class MediaAdapter {
+  get mediaName()           // DB に記録する媒体キー（例: "freins"）
+  get displayName()         // ログ・note に表示する人間向け名称（例: "ふれんず"）
+  async login(page)         // ログイン処理（デフォルト: no-op）
+  async fetchStatus(page, mediaId)  // 詳細ページからステータス取得
+  translateStatus(rawText)  // 取引状況原文 → 標準ステータス翻訳
+}
+```
+
+### 旧版スクリプトについて
+
+- `fetch-freins.js` / `run-freins-batch.js` / `recheck-vanished.js` は新版（`src/` 以下）に一本化済み。
+- Git履歴には残存しているが、現在は使用しない。新規開発は `src/` 以下のみ。
