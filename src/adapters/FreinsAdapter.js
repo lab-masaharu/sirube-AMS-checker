@@ -46,6 +46,10 @@ export class FreinsAdapter extends MediaAdapter {
     return "freins";
   }
 
+  get displayName() {
+    return "ふれんず";
+  }
+
   _log(level, action, metadata = {}) {
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),

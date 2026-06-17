@@ -117,7 +117,7 @@ async function main() {
         fetchResult = await adapter.fetchStatus(page, freinsId);
       }
 
-      const { dbJudgment, note } = computeJudgment(amsStatus, fetchResult, adapter.mediaName);
+      const { dbJudgment, note } = computeJudgment(amsStatus, fetchResult, adapter.displayName);
 
       log("INFO", "item_result", {
         objectId, freinsId, amsStatus,

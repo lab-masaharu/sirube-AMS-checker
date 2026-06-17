@@ -8,9 +8,14 @@
 // ============================================================
 
 export class MediaAdapter {
-  // 媒体名（"freins" / "suumo" / "athome" 等）。サブクラスで実装必須。
+  // 媒体名（"freins" / "suumo" / "athome" 等）。DBの media カラムに使う内部識別子。サブクラスで実装必須。
   get mediaName() {
     throw new Error(`${this.constructor.name}: mediaName を実装してください`);
+  }
+
+  // 人間向け表示名（note 等に使う）。デフォルトは mediaName と同じ。必要に応じてオーバーライド。
+  get displayName() {
+    return this.mediaName;
   }
 
   // ログイン。デフォルトは何もしない（ログイン不要な媒体はオーバーライド不要）。

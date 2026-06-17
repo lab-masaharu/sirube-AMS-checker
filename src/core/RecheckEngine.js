@@ -85,7 +85,7 @@ export class RecheckEngine {
         if (pageRecovered) {
           // 復活 → その時点のステータスで突合確定
           const { dbJudgment: j, note: n } = computeJudgment(
-            prop.amsStatus, fetchResult, this._adapter.mediaName
+            prop.amsStatus, fetchResult, this._adapter.displayName
           );
           dbJudgment = j;
           mediaStatus = fetchResult.mediaStatus;
