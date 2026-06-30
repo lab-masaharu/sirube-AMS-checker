@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS properties (
   media_url     TEXT,                                 -- 元情報URL
   freins_id     TEXT,                                 -- ふれんずID（freinsのみ）
   ams_status    TEXT,                                 -- 最後に観測したAMSステータス
+  ams_price_raw TEXT,                                 -- AMS一覧から読んだ価格原文
+  ams_price     BIGINT,                               -- AMS価格（円、正規化）
   first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   status        TEXT        NOT NULL DEFAULT 'active', -- active / gone（巡回で消えた）

@@ -115,6 +115,26 @@ function extractFreinsId(url) {
   return m ? m[1] : null;
 }
 
+function normalizePriceText(rawPrice) {
+  if (!rawPrice) return null;
+  const s = String(rawPrice).replace(/,/g, "");
+
+  const oku = s.match(/([0-9]+(?:\.[0-9]+)?)億/);
+  const man = s.match(/([0-9]+(?:\.[0-9]+)?)万/);
+
+  if (!oku && !man) {
+    const yen = s.match(/([0-9]+(?:\.[0-9]+)?)円/);
+    if (!yen) return null;
+    return Math.round(parseFloat(yen[1]));
+  }
+
+  let yen = 0;
+  if (oku) yen += parseFloat(oku[1]) * 100000000;
+  if (man) yen += parseFloat(man[1]) * 10000;
+
+  return Math.round(yen);
+}
+
 function assertEnv() {
   const missing = [];
   if (!AMS_EMAIL) missing.push("AMS_EMAIL");
@@ -131,6 +151,9 @@ async function extractRows(page) {
     return trs.map((tr) => {
       const objectId = tr.getAttribute("data-href");
       const anchors = Array.from(tr.querySelectorAll("a[href]"));
+      const tdTexts = Array.from(tr.querySelectorAll("td"))
+        .map((td) => (td.textContent || "").trim())
+        .filter(Boolean);
       let mediaUrl = null;
       for (const a of anchors) {
         const href = a.getAttribute("href") || "";
@@ -139,12 +162,14 @@ async function extractRows(page) {
           break;
         }
       }
-      return { objectId, mediaUrl };
+      const amsPriceRaw = tdTexts.find((text) => /[0-9]/.test(text) && (text.includes("万円") || text.includes("億") || text.includes("円"))) || null;
+      return { objectId, mediaUrl, amsPriceRaw };
     });
   });
   for (const r of rows) {
     r.media = detectMedia(r.mediaUrl);
     r.freinsId = r.media === "freins" ? extractFreinsId(r.mediaUrl) : null;
+    r.amsPrice = normalizePriceText(r.amsPriceRaw);
   }
   return rows;
 }

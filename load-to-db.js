@@ -30,6 +30,11 @@ const pool = new Pool({
 
 const TENANT = "sirube_office";
 
+async function ensurePropertiesPriceColumns(client) {
+  await client.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS ams_price_raw TEXT`);
+  await client.query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS ams_price BIGINT`);
+}
+
 async function main() {
   if (!fs.existsSync("results.json")) {
     console.error("[エラー] results.json が見つかりません。先に crawl-ams.js を実行してください。");
@@ -45,26 +50,29 @@ async function main() {
 
   try {
     await client.query("BEGIN");
+    await ensurePropertiesPriceColumns(client);
 
     for (const r of rows) {
       seenObjectIds.push(r.objectId);
       // UPSERT: あれば更新（last_seen_at, ams_status, media系を更新）、なければ挿入
       const res = await client.query(
         `INSERT INTO properties
-           (tenant_id, object_id, media, media_url, freins_id, ams_status,
+           (tenant_id, object_id, media, media_url, freins_id, ams_status, ams_price_raw, ams_price,
             first_seen_at, last_seen_at, status, system_code)
-         VALUES ($1,$2,$3,$4,$5,$6, now(), now(), 'active', $7)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now(), now(), 'active', $9)
          ON CONFLICT (tenant_id, object_id) DO UPDATE SET
            media       = EXCLUDED.media,
            media_url   = EXCLUDED.media_url,
            freins_id   = EXCLUDED.freins_id,
            ams_status  = EXCLUDED.ams_status,
+           ams_price_raw = EXCLUDED.ams_price_raw,
+           ams_price   = EXCLUDED.ams_price,
            last_seen_at = now(),
            status      = 'active',
            updated_at  = now()
          RETURNING (xmax = 0) AS inserted`,
         [TENANT, r.objectId, r.media, r.mediaUrl || null, r.freinsId || null,
-         r.amsStatus || null, SYSTEM_CODE]
+         r.amsStatus || null, r.amsPriceRaw || null, r.amsPrice || null, SYSTEM_CODE]
       );
       if (res.rows[0].inserted) inserted++; else updated++;
     }

@@ -49,9 +49,12 @@ const pool = new Pool({
 const adapter = new FreinsAdapter();
 
 async function main() {
-  const batchLimit = parseInt(process.argv[2] || String(DEFAULT_BATCH_LIMIT), 10);
-  if (isNaN(batchLimit) || batchLimit <= 0) {
-    console.error("件数上限は正の整数で指定してください。例: node src/run-batch.js 10");
+  const batchArg = (process.argv[2] || String(DEFAULT_BATCH_LIMIT)).trim();
+  const batchLimit = batchArg.toLowerCase() === "all"
+    ? null
+    : parseInt(batchArg, 10);
+  if (batchLimit !== null && (isNaN(batchLimit) || batchLimit <= 0)) {
+    console.error("件数上限は正の整数、または all で指定してください。例: node src/run-batch.js all");
     process.exit(1);
   }
   const batchOffset = parseInt(process.argv[3] || "0", 10);
@@ -66,21 +69,29 @@ async function main() {
   }
 
   const runId = `batch_${adapter.mediaName}_${new Date().toISOString().replace(/[:.]/g, "").substring(0, 15)}`;
-  log("INFO", "start", { media: adapter.mediaName, batchLimit, batchOffset, runId, headless: HEADLESS });
+  log("INFO", "start", {
+    media: adapter.mediaName,
+    batchLimit: batchLimit ?? "all",
+    batchOffset,
+    runId,
+    headless: HEADLESS,
+  });
 
   // ===== DB: 対象物件取得 =====
   const dbClient = await pool.connect();
   let properties;
   try {
     const { rows } = await dbClient.query(
-      `SELECT object_id, freins_id, ams_status
+      `SELECT object_id, freins_id, ams_status, ams_price
          FROM properties
         WHERE media = $1
           AND status = 'active'
           AND freins_id IS NOT NULL
         ORDER BY object_id
-        LIMIT $2 OFFSET $3`,
-      [adapter.mediaName, batchLimit, batchOffset]
+        ${batchLimit === null ? "OFFSET $2" : "LIMIT $2 OFFSET $3"}`,
+      batchLimit === null
+        ? [adapter.mediaName, batchOffset]
+        : [adapter.mediaName, batchLimit, batchOffset]
     );
     properties = rows;
   } finally {
@@ -130,6 +141,8 @@ async function main() {
         objectId, amsStatus,
         media: adapter.mediaName,
         mediaStatus: fetchResult.mediaStatus ?? null,
+        amsPrice: properties[i].ams_price ?? null,
+        mediaPrice: fetchResult.price ?? null,
         judgment: dbJudgment,
         note,
         runId,
@@ -188,6 +201,29 @@ async function main() {
         ORDER BY s.judgment, s.object_id`,
       [runId]
     );
+    const { rows: openToNegotiating } = await summaryClient.query(
+      `SELECT s.object_id, p.freins_id, s.note
+         FROM status_checks s
+         JOIN properties p ON p.object_id = s.object_id
+        WHERE s.run_id = $1
+          AND s.ams_status = '公開'
+          AND s.media_status = 'negotiating'
+        ORDER BY s.object_id`,
+      [runId]
+    );
+    const { rows: openToVanished } = await summaryClient.query(
+      `SELECT s.object_id, p.freins_id, s.note
+         FROM status_checks s
+         JOIN properties p ON p.object_id = s.object_id
+        WHERE s.run_id = $1
+          AND s.ams_status = '公開'
+          AND s.media_status = 'vanished'
+        ORDER BY s.object_id`,
+      [runId]
+    );
+    const priceChanges = checks
+      .filter((c) => c.amsPrice !== null && c.mediaPrice !== null && c.amsPrice !== c.mediaPrice)
+      .sort((a, b) => String(a.objectId).localeCompare(String(b.objectId)));
 
     console.log("\n========== バッチ結果サマリー ==========");
     console.log(`run_id   : ${runId}`);
@@ -197,14 +233,53 @@ async function main() {
     console.log("--- judgment 内訳 ---");
     for (const r of breakdown) console.log(`  ${r.judgment.padEnd(18)}: ${r.cnt} 件`);
     if (diffs.length > 0) {
-      console.log("\n--- mismatch / vanished 一覧 ---");
+      console.log("\n--- mismatch / vanished 一覧表 ---");
+      console.log("object_id        | freins_id      | AMS    | ふれんず   | judgment | note");
+      console.log("------------------|----------------|--------|------------|----------|------------------------------");
       for (const d of diffs) {
-        console.log(`  [${d.judgment}] object_id=${d.object_id} freins_id=${d.freins_id}`);
-        console.log(`          AMS: ${d.ams_status} / ふれんず: ${d.media_status}`);
-        console.log(`          note: ${d.note}`);
+        const note = String(d.note || "").replace(/\s+/g, " ").slice(0, 30);
+        console.log(
+          `${String(d.object_id).padEnd(16)} | ${String(d.freins_id || "-").padEnd(14)} | ${String(d.ams_status || "-").padEnd(6)} | ${String(d.media_status || "-").padEnd(10)} | ${String(d.judgment).padEnd(8)} | ${note}`
+        );
       }
     } else {
       console.log("\nmismatch / vanished: なし");
+    }
+
+    console.log("\n--- AMS公開中 → ふれんず商談中 ---");
+    console.log(`件数: ${openToNegotiating.length} 件`);
+    if (openToNegotiating.length > 0) {
+      console.log("object_id        | freins_id      | note");
+      console.log("------------------|----------------|------------------------------");
+      for (const r of openToNegotiating) {
+        const note = String(r.note || "").replace(/\s+/g, " ").slice(0, 30);
+        console.log(`${String(r.object_id).padEnd(16)} | ${String(r.freins_id || "-").padEnd(14)} | ${note}`);
+      }
+    }
+
+    console.log("\n--- AMS公開中 → ふれんず掲載消失 ---");
+    console.log(`件数: ${openToVanished.length} 件`);
+    if (openToVanished.length > 0) {
+      console.log("object_id        | freins_id      | note");
+      console.log("------------------|----------------|------------------------------");
+      for (const r of openToVanished) {
+        const note = String(r.note || "").replace(/\s+/g, " ").slice(0, 30);
+        console.log(`${String(r.object_id).padEnd(16)} | ${String(r.freins_id || "-").padEnd(14)} | ${note}`);
+      }
+    }
+
+    console.log("\n--- 価格変更物件 ---");
+    console.log(`件数: ${priceChanges.length} 件`);
+    if (priceChanges.length > 0) {
+      console.log("object_id        | freins_id      | AMS価格   | WEB価格   | 差額      | note");
+      console.log("------------------|----------------|-----------|-----------|-----------|------------------------------");
+      for (const r of priceChanges) {
+        const diff = r.mediaPrice - r.amsPrice;
+        const note = String(r.note || "").replace(/\s+/g, " ").slice(0, 30);
+        console.log(
+          `${String(r.objectId).padEnd(16)} | ${String(r.freinsId || "-").padEnd(14)} | ${String(r.amsPrice).padEnd(9)} | ${String(r.mediaPrice).padEnd(9)} | ${String(diff).padEnd(9)} | ${note}`
+        );
+      }
     }
     console.log("=========================================\n");
   } finally {

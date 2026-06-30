@@ -10,7 +10,20 @@ dotenv.config();
 
 const PORT = 5600;
 const HEADLESS = (process.env.HEADLESS ?? "true").toLowerCase() === "true";
+const DEMO_MODE = (process.env.DEMO_MODE ?? "false").toLowerCase() === "true";
+const DEMO_SLOW_MO_MS = Number.parseInt(process.env.DEMO_SLOW_MO_MS ?? "350", 10);
 const SYSTEM_CODE = "sys_ops_ams_checker";
+
+function getLaunchOptions() {
+  const launchOptions = { headless: HEADLESS };
+
+  if (DEMO_MODE) {
+    launchOptions.slowMo = Number.isFinite(DEMO_SLOW_MO_MS) ? DEMO_SLOW_MO_MS : 350;
+    launchOptions.args = ["--start-maximized"];
+  }
+
+  return launchOptions;
+}
 
 function log(level, action, metadata = {}) {
   console.log(
@@ -47,9 +60,17 @@ function withPageLock(fn) {
 
 async function ensureSession() {
   if (!_browser) {
-    log("INFO", "browser_launch", { headless: HEADLESS });
-    _browser = await chromium.launch({ headless: HEADLESS });
-    _page = await _browser.newPage();
+    const launchOptions = getLaunchOptions();
+    log("INFO", "browser_launch", {
+      headless: HEADLESS,
+      demoMode: DEMO_MODE,
+      slowMoMs: launchOptions.slowMo ?? 0,
+    });
+    _browser = await chromium.launch(launchOptions);
+    const contextOptions = DEMO_MODE ? { viewport: null } : {};
+    const context = await _browser.newContext(contextOptions);
+    _page = await context.newPage();
+    await _page.bringToFront().catch(() => {});
     _loggedIn = false;
   }
   if (!_loggedIn) {
@@ -92,7 +113,7 @@ function createServer() {
     "fetch_freins_status",
     {
       description:
-        "ふれんず物件の掲載ステータスを取得する（freins_id を受け取り、rawStatus・mediaStatus・judgment を返す）",
+        "ふれんず物件の掲載ステータスを取得する（freins_id を受け取り、rawStatus・mediaStatus・judgment・rawPrice を返す）",
       inputSchema: {
         freins_id: z.string().describe("ふれんずID（12桁、例: 000002488843）"),
       },
@@ -173,6 +194,7 @@ app.listen(PORT, (err) => {
     port: PORT,
     endpoint: `http://localhost:${PORT}/mcp`,
     headless: HEADLESS,
+    demoMode: DEMO_MODE,
   });
   console.log(`[freins-mcp] Streamable HTTP listening on port ${PORT}`);
   console.log(`[freins-mcp] Endpoint: http://localhost:${PORT}/mcp`);

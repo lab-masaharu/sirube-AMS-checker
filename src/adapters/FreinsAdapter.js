@@ -110,6 +110,45 @@ export class FreinsAdapter extends MediaAdapter {
     });
   }
 
+  // 価格原文抽出（ふれんず詳細ページ）
+  // 「その他一時金」など .info-val が同じ値を返す別ラベルと混同しないよう、
+  // label.textContent が厳密に「価格」を含むものだけを対象にする（取引状況と同じペア構造）。
+  async _extractPrice(page) {
+    return await page.evaluate(() => {
+      const labels = Array.from(document.querySelectorAll(".info-label"));
+      for (const label of labels) {
+        if (label.textContent.trim().includes("価格")) {
+          const parent = label.parentElement;
+          if (parent) {
+            const val = parent.querySelector(".info-val");
+            if (val) return val.textContent.trim();
+          }
+          const next = label.nextElementSibling;
+          if (next) return next.textContent.trim();
+        }
+      }
+      return null;
+    });
+  }
+
+  // 価格原文 → 円単位の整数に正規化（"1億2000万円" のような億・万混在に対応）
+  // 数値として解釈できない原文（"応相談" 等）は null を返す。誤った数値を作らない。
+  normalizePrice(rawPrice) {
+    if (!rawPrice) return null;
+    const s = rawPrice.replace(/,/g, "");
+
+    const oku = s.match(/([0-9]+(?:\.[0-9]+)?)億/);
+    const man = s.match(/([0-9]+(?:\.[0-9]+)?)万/);
+
+    if (!oku && !man) return null;
+
+    let yen = 0;
+    if (oku) yen += parseFloat(oku[1]) * 100000000;
+    if (man) yen += parseFloat(man[1]) * 10000;
+
+    return Math.round(yen);
+  }
+
   // 取引状況原文 → 標準ステータス変換（CLAUDE.md §11 翻訳テーブル）
   translateStatus(rawText) {
     if (!rawText) return "unknown";
@@ -215,7 +254,7 @@ export class FreinsAdapter extends MediaAdapter {
       this._log("WARN", "fetch_error", { freinsId, message: err.message });
       return {
         freinsId, url, judgment: "error",
-        rawStatus: null, mediaStatus: null,
+        rawStatus: null, mediaStatus: null, rawPrice: null, price: null,
         note: `取得失敗: ${err.message}`,
       };
     }
@@ -228,7 +267,7 @@ export class FreinsAdapter extends MediaAdapter {
       this._log("WARN", "session_expired", { freinsId, finalUrl });
       return {
         freinsId, url, judgment: "error",
-        rawStatus: null, mediaStatus: null,
+        rawStatus: null, mediaStatus: null, rawPrice: null, price: null,
         note: "セッション切れ - auth.f-takken.com へリダイレクト",
       };
     }
@@ -259,7 +298,7 @@ export class FreinsAdapter extends MediaAdapter {
       this._log("INFO", "page_vanished_suspected", { freinsId, httpStatus });
       return {
         freinsId, url, judgment: "vanished_suspected",
-        rawStatus: null, mediaStatus: "vanished",
+        rawStatus: null, mediaStatus: "vanished", rawPrice: null, price: null,
         note: `ふれんず 消失疑い (HTTP ${httpStatus}, bodyClass: "${bodyClass.substring(0, 60)}")`,
       };
     }
@@ -267,12 +306,14 @@ export class FreinsAdapter extends MediaAdapter {
     // 詳細ページ（body.detail）
     if (bodyClass.includes("detail")) {
       const rawStatus = await this._extractTradeStatus(page);
-      this._log("INFO", "raw_status_extracted", { freinsId, rawStatus });
+      const rawPrice = await this._extractPrice(page);
+      const price = this.normalizePrice(rawPrice);
+      this._log("INFO", "raw_status_extracted", { freinsId, rawStatus, rawPrice, price });
 
       if (rawStatus === null) {
         return {
           freinsId, url, judgment: "error",
-          rawStatus: null, mediaStatus: "unknown",
+          rawStatus: null, mediaStatus: "unknown", rawPrice, price,
           note: "取引状況ラベルが見つかりませんでした（ページ構造を要確認）",
         };
       }
@@ -280,7 +321,7 @@ export class FreinsAdapter extends MediaAdapter {
       const mediaStatus = this.translateStatus(rawStatus);
       return {
         freinsId, url, judgment: mediaStatus,
-        rawStatus, mediaStatus,
+        rawStatus, mediaStatus, rawPrice, price,
         note: `取引状況原文: 「${rawStatus}」`,
       };
     }
@@ -292,7 +333,7 @@ export class FreinsAdapter extends MediaAdapter {
     });
     return {
       freinsId, url, judgment: "error",
-      rawStatus: null, mediaStatus: null,
+      rawStatus: null, mediaStatus: null, rawPrice: null, price: null,
       note: `不明なページ構造 (HTTP ${httpStatus}, bodyClass: "${bodyClass.substring(0, 80)}")`,
     };
   }
